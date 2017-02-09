@@ -1,0 +1,227 @@
+#!/bin/sh
+#
+# image_subtraction.sh <srcim> <refim> [args]
+#
+# astrometrically co-aligns srcim to refim and performs
+#  image subtaction using hotpants
+#
+# sources of interest should be brighter in the srcim than in the refim
+#
+# refim can be "sdss", which will cause sdss images to be downloaded
+#
+# outputs: difference image and rms difference image diff.fits and diff.rms.fits
+#
+
+srcim=$1
+shift
+refim=$1
+shift
+
+#estimate sigma by default
+sigma=
+sat_level=25000.0
+kernel_order=2
+bg_order=0
+inst=ratir_nir
+nreg=1
+cleanup=yes
+# systematic error
+sys_fac=0.1
+# wcs reference image
+wcs_ref=
+
+while [ $# -gt 0 ] ; do eval $1 ; shift ; done
+
+refim0=$refim
+if [ "$refim" = "sdss" ]; then
+    [ -d sdss_data ] || mkdir sdss_data
+    filter=`gethead FILTER $srcim`
+    if [ -f sdss_data/no_data.txt ]; then
+        echo "No SDSS data available, exiting..." 
+        exit 1
+    fi
+
+    refim=sdss_data/stack_sdss_${filter}.fits
+    if [ -f "$refim" ]; then
+        echo "SDSS image $refim already present, not remaking..."
+    else
+        echo "Trying to download SDSS data for $refim ..."
+
+        x0=`gethead NAXIS1 $srcim | awk '{print $1/2.}'`
+        y0=`gethead NAXIS2 $srcim | awk '{print $1/2.}'`
+        echo "$x0 $y0" > xy$$.txt
+        xy2radec.py $srcim xy$$.txt > radec$$.txt
+
+        cd=`gethead CD1_1 CD1_2 $srcim | awk '{print sqrt($1^2+$2^2)}'`
+        ra=`awk '{print $1}' radec$$.txt`
+        dec=`awk '{print $2}' radec$$.txt`
+        rm xy$$.txt radec$$.txt
+
+        rad=`echo $x0 $y0 $cd | awk '{printf("%.1f\n",sqrt($1^2+$2^2)*$3*60)}'`
+        echo grab_sdss_stack.sh ra=$ra dec=$dec radius=$rad filter=$filter
+        grab_sdss_stack.sh ra=$ra dec=$dec radius=$rad filter=$filter > /dev/null 2>&1
+        if [ -f "$refim" ]; then
+            echo "Created SDSS data file $refim as reference."
+        else
+            echo "No SDSS data found, exiting..." 
+            exit 2
+        fi
+    fi
+fi
+
+src_base=`echo $srcim | sed -e 's/\.fits//g'`
+ref_base=`echo $refim | sed -e 's/\.fits//g'`
+
+srcbad=${src_base}.bad.fits
+srcdiff=${src_base}.diff.fits
+srcdiffrms=${src_base}.diff.rms.fits
+
+cp $refim tmpl$$.fits
+cp ${ref_base}.rms.fits tmpl$$.rms.fits
+
+#
+#
+echo "Astrometryically aligning $srcim to $refim ..."
+#
+run_sex1.sh $srcim $inst -BACK_SIZE 16 -CHECKIMAGE_TYPE OBJECTS -CHECKIMAGE_NAME mask.fits
+run_sex1.sh tmpl$$.fits $inst -BACK_SIZE 16
+sexlist_cc_rot.py tmpl$$.fits tmpl$$_dir/tmpl$$_radec.txt ${src_base}_dir/${src_base}_radec.txt X 5.0 0 0 20.0
+
+# swarp the source image to the same pixel coordinates as the reference image
+imhead $srcim > test$$.head
+imhead $srcim > test$$.rms.head
+
+echo swarp tmpl$$.fits -c ${SWARP_DIR}/ratir_redux.swarp -IMAGEOUT_NAME test$$.fits -WEIGHTOUT_NAME expmaptest$$.fits -RESCALE_WEIGHTS Y -WEIGHT_IMAGE ${ref_base}.rms.fits
+swarp tmpl$$.fits -c ${SWARP_DIR}/ratir_redux.swarp -IMAGEOUT_NAME test$$.fits -WEIGHTOUT_NAME expmaptest$$.fits -RESCALE_WEIGHTS Y -WEIGHT_IMAGE ${ref_base}.rms.fits
+
+copywcs.sh tmpl$$.fits tmpl$$.rms.fits
+echo swarp tmpl$$.rms.fits -c ${SWARP_DIR}/ratir_redux.swarp -IMAGEOUT_NAME test$$.rms.fits -WEIGHTOUT_NAME expmaptest$$.fits -RESCALE_WEIGHTS Y -WEIGHT_IMAGE ${ref_base}.rms.fits -SUBTRACT_BACK N
+swarp tmpl$$.rms.fits -c ${SWARP_DIR}/ratir_redux.swarp -IMAGEOUT_NAME test$$.rms.fits -WEIGHTOUT_NAME expmaptest$$.fits -RESCALE_WEIGHTS Y -WEIGHT_IMAGE ${ref_base}.rms.fits -SUBTRACT_BACK N
+
+mv test$$.fits tmpl$$.fits
+mv test$$.rms.fits tmpl$$.rms.fits
+rm test$$.head test$$.rms.head
+
+grep -v '#' ${src_base}_dir/${src_base}_radec.txt | awk '{print $1,$2,$NF,$3}' > tmpl$$_dir/sky_radec.list
+run_sex1.sh tmpl$$.fits $inst -BACK_SIZE 16 -CHECKIMAGE_TYPE OBJECTS -CHECKIMAGE_NAME mask.fits
+
+if [ "$sigma" ]; then
+    echo "Using sigma=$sigma"
+else
+    echo "Estimating sigma..."
+    grep -v '#' tmpl$$_dir/tmpl$$_radec.txt | awk '{print 0,$NF,$7}' > fwhm_tmpl$$.txt
+    grep -v '#' ${src_base}_dir/${src_base}_radec.txt | awk '{print 1,$NF,$7}' > fwhm_${src_base}.txt
+    cat fwhm_tmpl$$.txt fwhm_${src_base}.txt | awk '{if($1==0) f[$2]=$3; else if (f[$2]>0) print f[$2]*f[$2]-$3*$3}' | sort -n > fwhm$$.txt
+    n=`cat fwhm$$.txt | wc -l | awk '{printf("%.0f\n",$1/2.)}'`
+    sigma=`sed -n "${n}p" fwhm$$.txt | awk '{x=$1;if(x<0) x=-x; if (x<0.5) x=0.5; printf("%.1f\n",sqrt(x)/2.35)}'`
+    echo "Using sigma=$sigma"
+    rm fwhm_tmpl$$.txt fwhm_${src_base}.txt fwhm$$.txt
+fi
+
+#
+#make the badpix maps, and get the image fwhm
+#
+sources2mask.py ${src_base}.rms.fits ${src_base}_dir/mask.fits mask${src_base}$$.fits 3.0
+sources2mask.py tmpl$$.rms.fits tmpl$$_dir/mask.fits masktmpl$$.fits 3.0
+imarith masktmpl$$.fits mask${src_base}$$.fits mul mask$$.fits
+rm masktmpl$$.fits mask${src_base}$$.fits
+
+echo "
+from pyfits import getdata,writeto
+from numpy import median,where,abs,sqrt,logical_or,zeros
+from clean_h2rg_image_mask import backsub
+
+dat,hdr = getdata('${src_base}.fits',header=True)
+rms = getdata('${src_base}.rms.fits')
+dat0,hdr0 = getdata('tmpl$$.fits',header=True)
+rms0 = getdata('tmpl$$.rms.fits').clip(0)
+
+m0,m1 = median(rms0[rms0>0]), median(rms[rms>0])
+
+badpix = logical_or(rms<=0,rms0<=0)
+i,j = where(rms0*m1<2*rms*m0)
+i1,i2,j1,j2 = i.min(),i.max()+1,j.min(),j.max()+1
+badpix[:i1] = True; badpix[i2:] = True
+badpix[:,j1] = True; badpix[:,j2:] = True
+goodpix=-badpix
+dat[badpix] = 0; dat0[badpix] = 0
+
+unmasked = getdata('mask$$.fits').astype('bool')
+masked = -unmasked
+
+h = goodpix*unmasked
+x = dat[h]/rms[h]
+x0 = median(x); dx0 = 1.48*median(abs(x-x0))
+rms *= dx0; rms[rms<=0] = median(rms[h])
+
+x = dat0[h]/rms0[h]
+x0 = median(x); dx0 = 1.48*median(abs(x-x0))
+rms0 *= dx0; rms0[rms0<=0] = median(rms0[h])
+
+mx = goodpix.sum(axis=1)
+my = goodpix.sum(axis=0)
+h=where(mx>0.5*mx.max())[0]; i1,i2 = h[0],h[-1]
+h=where(my>0.5*my.max())[0]; j1,j2 = h[0],h[-1]
+hdr['GOOD'] = '%d %d %d %d' % (j1,j2,i1,i2)
+writeto('$srcbad',badpix.astype('int16'),hdr,clobber=True)
+
+if ($sys_fac>0):
+    h = goodpix*masked
+    rms[h] = sqrt( rms[h]**2+($sys_fac*dat[h].clip(0))**2 )
+    rms0[h] = sqrt( rms0[h]**2+($sys_fac*dat0[h].clip(0))**2 )
+
+writeto('${src_base}$$.rms.fits',rms,hdr)
+writeto('tmpl$$.rms.fits',rms0,hdr0,clobber=True)
+
+h = goodpix*unmasked
+wt = zeros(rms.shape); wt0 = zeros(rms.shape)
+wt[h] = 1/rms[h]**2; wt0[h] = 1/rms0[h]**2
+i,j = where(goodpix)
+i1,i2,j1,j2 = i.min(),i.max()+1,j.min(),j.max()+1
+ord = int((i2-i1+j2-j1)/200.)
+if (ord<1): ord=1
+backsub(dat[i1:i2,j1:j2],wt[i1:i2,j1:j2],order=ord)
+backsub(dat0[i1:i2,j1:j2],wt0[i1:i2,j1:j2],order=ord)
+dat[badpix]=0; dat0[badpix]=0
+
+writeto('${src_base}$$.fits',dat,hdr)
+writeto('tmpl$$.fits',dat0,hdr0,clobber=True)" | python
+
+good=`gethead GOOD $srcbad`
+
+#
+# running hotpants image subtraction
+gflag=`echo $sigma | awk '{ds=$1; if (ds<0.5) ds=0.5; printf("3 6 %f 4 %f 2 %f\n",0.5*ds,ds,2*ds)}'`
+
+echo hotpants -inim ${src_base}$$.fits -ini ${src_base}$$.rms.fits -tni tmpl$$.rms.fits -tmplim tmpl$$.fits -tmi $srcbad -imi $srcbad -outim $srcdiff -oni $srcdiffrms -tu $sat_level -iu $sat_level -tl -$sat_level -il -$sat_level -ko $kernel_order -bgo $bg_order -ng $gflag -v 0 -nrx $nreg -nry $nreg -gd $good
+hotpants -inim ${src_base}$$.fits -ini ${src_base}$$.rms.fits -tni tmpl$$.rms.fits -tmplim tmpl$$.fits -tmi $srcbad -imi $srcbad -outim $srcdiff -oni $srcdiffrms -tu $sat_level -iu $sat_level -tl -$sat_level -il -$sat_level -ko $kernel_order -bgo $bg_order -ng $gflag -v 0 -nrx $nreg -nry $nreg -gd $good
+
+fitsrms2jpg.sh $srcdiff
+
+if [ "$wcs_ref" ]; then
+    if [ -f "$wcs_ref" ]; then
+        echo "Aligning $srcdiff to wcs reference image $wcs_ref ..."
+        wbase=`echo $wcs_ref | sed -e 's/\.fits//g'`
+        [ -f ${wbase}_dir/${wbase}_radec.txt ] || run_sex1.sh $wcs_ref $inst
+        [ -f ${src_base}$$_dir/${src_base}$$_radec.txt ] || run_sex1.sh ${src_base}$$.fits $inst
+        sexlist_cc_rot.py $srcdiff ${src_base}$$_dir/${src_base}$$_radec.txt ${wbase}_dir/${wbase}_radec.txt X 5 0 0 20
+        copywcs.sh $srcdiff $srcdiffrms
+    else
+        echo "No file $wcs_ref , skipping..."
+    fi
+fi
+
+# do photometry
+run_sex1.sh $srcim $inst dao > report$$.txt 2>/dev/null
+fwhm=`grep 'Median FWHM:' report$$.txt | awk '{print $3}'`
+[ -d ${src_base}.diff_dir ] || mkdir ${src_base}.diff_dir
+cp ${src_base}_dir/psf.fits ${src_base}.diff_dir/psf.fits
+run_sex1.sh ${src_base}.diff.fits $inst dao
+grep '#' ${src_base}.diff_dir/${src_base}.diff_radec.txt > ${src_base}.diff_radec.txt
+grep -v '#' ${src_base}.diff_dir/${src_base}.diff_radec.txt | awk '{if($4<=0.1 && $7>'$fwhm'/2.) print}' >> ${src_base}.diff_radec.txt
+
+#cleanup
+if [ "$cleanup" = "yes" ]; then
+    rm -r ${src_base}_dir tmpl$$_dir ${src_base}$$_dir ${src_base}.diff_dir 2>/dev/null
+    rm tmpl$$.fits tmpl$$.rms.fits expmaptest$$.fits $srcbad ${src_base}$$.fits ${src_base}$$.rms.fits mask$$.fits report$$.txt
+fi
