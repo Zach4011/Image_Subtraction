@@ -126,25 +126,25 @@ sources2mask.py tmpl$$.rms.fits tmpl$$_dir/mask.fits masktmpl$$.fits 3.0
 imarith masktmpl$$.fits mask${src_base}$$.fits mul mask$$.fits
 rm masktmpl$$.fits mask${src_base}$$.fits
 
-#echo "
-#from pyfits import getdata,writeto
-#from numpy import median,where,abs,sqrt,logical_or,zeros
-#from clean_h2rg_image_mask import backsub
+echo "
+from pyfits import getdata,writeto
+from numpy import median,where,abs,sqrt,logical_or,zeros
+from clean_h2rg_image_mask import backsub
 #
-#dat,hdr = getdata('${src_base}.fits',header=True)
-#rms = getdata('${src_base}.rms.fits')
-#dat0,hdr0 = getdata('tmpl$$.fits',header=True)
-#rms0 = getdata('tmpl$$.rms.fits').clip(0)
+dat,hdr = getdata('${src_base}.fits',header=True)
+rms = getdata('${src_base}.rms.fits')
+dat0,hdr0 = getdata('tmpl$$.fits',header=True)
+rms0 = getdata('tmpl$$.rms.fits').clip(0)
 #
-#m0,m1 = median(rms0[rms0>0]), median(rms[rms>0])
+m0,m1 = median(rms0[rms0>0]), median(rms[rms>0])
 #
-#badpix = logical_or(rms<=0,rms0<=0)
-#i,j = where(rms0*m1<2*rms*m0)
-#i1,i2,j1,j2 = i.min(),i.max()+1,j.min(),j.max()+1
-#badpix[:i1] = True; badpix[i2:] = True
-#badpix[:,j1] = True; badpix[:,j2:] = True
-#goodpix=-badpix
-#dat[badpix] = 0; dat0[badpix] = 0
+badpix = logical_or(rms<=0,rms0<=0)
+i,j = where(rms0*m1<2*rms*m0)
+i1,i2,j1,j2 = i.min(),i.max()+1,j.min(),j.max()+1
+badpix[:i1] = True; badpix[i2:] = True
+badpix[:,j1] = True; badpix[:,j2:] = True
+goodpix=-badpix
+dat[badpix] = 0; dat0[badpix] = 0
 
 unmasked = getdata('mask$$.fits').astype('bool')
 masked = -unmasked
