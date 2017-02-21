@@ -27,7 +27,7 @@ nreg=1
 cleanup=yes
 # systematic error
 sys_fac=0.1
-sys_fac2=0.5 # <---- Note: new sys_fac
+sys_fac2=0.15 # <---- Note: new sys_fac
 # wcs reference image
 wcs_ref=
 
