@@ -120,6 +120,17 @@ else
     rm fwhm_tmpl$$.txt fwhm_${src_base}.txt fwhm$$.txt
 fi
 
+
+src_base=`echo $srcim | sed -e 's/\.fits//g'`
+ref_base=`echo $refim | sed -e 's/\.fits//g'`
+
+srcbad=${src_base}.bad.fits
+srcdiff=${src_base}.diff.fits
+srcdiffrms=${src_base}.diff.rms.fits
+
+cp $refim tmpl$$.fits
+cp ${ref_base}.rms.fits tmpl$$.rms.fits
+
 #
 #make the badpix maps, and get the image fwhm
 #
