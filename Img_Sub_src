@@ -120,7 +120,7 @@ else
     rm fwhm_tmpl$$.txt fwhm_${src_base}.txt fwhm$$.txt
 fi
 
-
+########## <- new changes!
 src_base=`echo $srcim | sed -e 's/\.fits//g'`
 ref_base=`echo $refim | sed -e 's/\.fits//g'`
 
@@ -130,6 +130,21 @@ srcdiffrms=${src_base}.diff.rms.fits
 
 cp $refim tmpl$$.fits
 cp ${ref_base}.rms.fits tmpl$$.rms.fits
+
+writeto('${src_base}$$.rms.fits',rms,hdr)
+writeto('tmpl$$.rms.fits',rms0,hdr0,clobber=True)
+
+h = goodpix*unmasked
+wt = zeros(rms.shape); wt0 = zeros(rms.shape)
+wt[h] = 1/rms[h]**2; wt0[h] = 1/rms0[h]**2
+i,j = where(goodpix)
+i1,i2,j1,j2 = i.min(),i.max()+1,j.min(),j.max()+1
+ord = int((i2-i1+j2-j1)/200.)
+if (ord<1): ord=1
+backsub(dat[i1:i2,j1:j2],wt[i1:i2,j1:j2],order=ord)
+backsub(dat0[i1:i2,j1:j2],wt0[i1:i2,j1:j2],order=ord)
+dat[badpix]=0; dat0[badpix]=0
+##########
 
 #
 #make the badpix maps, and get the image fwhm
