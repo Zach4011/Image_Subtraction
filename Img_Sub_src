@@ -121,6 +121,10 @@ else
 fi
 
 ########## <- new changes!
+#src_base=`echo $srcim | sed -e 's/\.fits//g'`
+#ref_base=`echo $refim | sed -e 's/\.fits//g'`
+
+
 src_base=`echo $srcim | sed -e 's/\.fits//g'`
 ref_base=`echo $refim | sed -e 's/\.fits//g'`
 
